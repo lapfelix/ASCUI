@@ -351,6 +351,7 @@ struct ContentView: View {
             }
         }
         .padding()
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     private var lockedCredentials: some View {
@@ -489,6 +490,7 @@ struct ContentView: View {
                     Task { await viewModel.fetchMerchantCertificateStatuses() }
                 }
                 .disabled(!viewModel.canFetchMerchantCertificates)
+                .buttonStyle(.glass(.regular.tint(.accentColor).interactive()))
 
                 Spacer()
 
@@ -523,33 +525,36 @@ struct ContentView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal)
 
-            List(viewModel.sortedMerchantCertificateStatuses) { merchant in
-                HStack {
-                    Toggle(isOn: Binding(
-                        get: { viewModel.selectedMerchants.contains(merchant.id) },
-                        set: { isOn in
-                            if isOn { viewModel.selectedMerchants.insert(merchant.id) }
-                            else { viewModel.selectedMerchants.remove(merchant.id) }
+            List {
+                ForEach(Array(viewModel.sortedMerchantCertificateStatuses.enumerated()), id: \.element.id) { index, merchant in
+                    HStack {
+                        Toggle(isOn: Binding(
+                            get: { viewModel.selectedMerchants.contains(merchant.id) },
+                            set: { isOn in
+                                if isOn { viewModel.selectedMerchants.insert(merchant.id) }
+                                else { viewModel.selectedMerchants.remove(merchant.id) }
+                            }
+                        )) {
+                            VStack(alignment: .leading) {
+                                Text(merchant.identifier)
+                                Text(merchant.name)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                    )) {
-                        VStack(alignment: .leading) {
-                            Text(merchant.identifier)
-                            Text(merchant.name)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        .toggleStyle(.checkbox)
+                        Spacer()
+                        Text(formattedMerchantExpirationDate(merchant.activeExpirationDate))
+                            .foregroundStyle(merchantExpiresWithinOneMonth(merchant.activeExpirationDate) ? .yellow : .primary)
+                            .frame(width: 170, alignment: .leading)
+                        Label(
+                            merchant.hasReadyCertificateToActivate ? "Yes" : "No",
+                            systemImage: merchant.hasReadyCertificateToActivate ? "checkmark.circle.fill" : "xmark.circle"
+                        )
+                        .foregroundStyle(merchant.hasReadyCertificateToActivate ? .green : .secondary)
+                        .frame(width: 140, alignment: .leading)
                     }
-                    .toggleStyle(.checkbox)
-                    Spacer()
-                    Text(formattedMerchantExpirationDate(merchant.activeExpirationDate))
-                        .foregroundStyle(merchantExpiresWithinOneMonth(merchant.activeExpirationDate) ? .yellow : .primary)
-                        .frame(width: 170, alignment: .leading)
-                    Label(
-                        merchant.hasReadyCertificateToActivate ? "Yes" : "No",
-                        systemImage: merchant.hasReadyCertificateToActivate ? "checkmark.circle.fill" : "xmark.circle"
-                    )
-                    .foregroundStyle(merchant.hasReadyCertificateToActivate ? .green : .secondary)
-                    .frame(width: 140, alignment: .leading)
+                    .listRowBackground(listRowBackground(for: index))
                 }
             }
 
@@ -559,6 +564,7 @@ struct ContentView: View {
                     viewModel.showActivateConfirmation = true
                 }
                 .disabled(viewModel.merchantsToActivate.isEmpty || viewModel.isLoading)
+                .buttonStyle(.glass(.regular.tint(.accentColor).interactive()))
             }
             .padding(.horizontal)
             .confirmationDialog(
@@ -605,6 +611,7 @@ struct ContentView: View {
         }
         .padding()
         .disabled(!viewModel.canFetch)
+        .buttonStyle(.glass(.regular.tint(.accentColor).interactive()))
     }
 
     // MARK: - Error / Loading
@@ -640,37 +647,43 @@ struct ContentView: View {
             VStack(alignment: .leading) {
                 Text("Apps (\(viewModel.selectedApps.count)/\(viewModel.apps.count))").font(.headline)
                 List {
-                    ForEach(viewModel.apps) { app in
-                        Toggle(app.attributes.name, isOn: Binding(
-                            get: { viewModel.selectedApps.contains(app) },
-                            set: { isOn in
+                    ForEach(Array(viewModel.apps.enumerated()), id: \.element.id) { index, app in
+                        AppRow(
+                            name: app.attributes.name,
+                            isSelected: viewModel.selectedApps.contains(app),
+                            onToggle: { isOn in
                                 if isOn { viewModel.selectedApps.insert(app) }
                                 else { viewModel.selectedApps.remove(app) }
                             }
-                        ))
-                        .toggleStyle(.checkbox)
+                        )
+                        .equatable()
+                        .listRowBackground(listRowBackground(for: index))
                     }
                 }
+                .transaction { $0.animation = nil }
             }
+            .glassEffect(.regular, in: .rect(cornerRadius: 16))
 
             VStack(alignment: .leading) {
                 Text("Users (\(viewModel.selectedUsers.count)/\(viewModel.users.count))").font(.headline)
                 List {
-                    ForEach(viewModel.users) { user in
-                        Toggle(
-                            "\(user.attributes.firstName ?? "") \(user.attributes.lastName ?? "")",
-                            isOn: Binding(
-                                get: { viewModel.selectedUsers.contains(user) },
-                                set: { isOn in
-                                    if isOn { viewModel.selectedUsers.insert(user) }
-                                    else { viewModel.selectedUsers.remove(user) }
-                                }
-                            )
+                    ForEach(Array(viewModel.users.enumerated()), id: \.element.id) { index, user in
+                        UserRow(
+                            name: "\(user.attributes.firstName ?? "") \(user.attributes.lastName ?? "")",
+                            email: user.attributes.username,
+                            isSelected: viewModel.selectedUsers.contains(user),
+                            onToggle: { isOn in
+                                if isOn { viewModel.selectedUsers.insert(user) }
+                                else { viewModel.selectedUsers.remove(user) }
+                            }
                         )
-                        .toggleStyle(.checkbox)
+                        .equatable()
+                        .listRowBackground(listRowBackground(for: index))
                     }
                 }
+                .transaction { $0.animation = nil }
             }
+            .glassEffect(.regular, in: .rect(cornerRadius: 16))
         }
     }
 
@@ -692,6 +705,7 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
     }
 
     private var addButton: some View {
@@ -700,5 +714,62 @@ struct ContentView: View {
         }
         .padding()
         .disabled(!viewModel.canAddTesters)
+        .buttonStyle(.glass(.regular.tint(.accentColor).interactive()))
+    }
+
+    @ViewBuilder
+    private func listRowBackground(for index: Int) -> some View {
+        if index.isMultiple(of: 2) {
+            Color.clear
+        } else {
+            Color.secondary.opacity(0.08)
+        }
+    }
+
+    private struct AppRow: View, Equatable {
+        let name: String
+        let isSelected: Bool
+        let onToggle: (Bool) -> Void
+
+        static func == (lhs: AppRow, rhs: AppRow) -> Bool {
+            lhs.name == rhs.name && lhs.isSelected == rhs.isSelected
+        }
+
+        var body: some View {
+            Toggle(name, isOn: Binding(
+                get: { isSelected },
+                set: { onToggle($0) }
+            ))
+            .toggleStyle(.checkbox)
+            .lineLimit(1)
+        }
+    }
+
+    private struct UserRow: View, Equatable {
+        let name: String
+        let email: String
+        let isSelected: Bool
+        let onToggle: (Bool) -> Void
+
+        static func == (lhs: UserRow, rhs: UserRow) -> Bool {
+            lhs.name == rhs.name && lhs.email == rhs.email && lhs.isSelected == rhs.isSelected
+        }
+
+        var body: some View {
+            Toggle(isOn: Binding(
+                get: { isSelected },
+                set: { onToggle($0) }
+            )) {
+                HStack(spacing: 8) {
+                    Text(name)
+                        .lineLimit(1)
+                    Text(email)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .toggleStyle(.checkbox)
+        }
     }
 }
