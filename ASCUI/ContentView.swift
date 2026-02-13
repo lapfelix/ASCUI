@@ -662,7 +662,6 @@ struct ContentView: View {
                 }
                 .transaction { $0.animation = nil }
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: 16))
 
             VStack(alignment: .leading) {
                 Text("Users (\(viewModel.selectedUsers.count)/\(viewModel.users.count))").font(.headline)
@@ -683,7 +682,6 @@ struct ContentView: View {
                 }
                 .transaction { $0.animation = nil }
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: 16))
         }
     }
 
@@ -705,7 +703,6 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
     }
 
     private var addButton: some View {
