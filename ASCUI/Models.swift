@@ -101,3 +101,57 @@ struct BetaTesterRequest: Codable {
         let id: String
     }
 }
+
+// MARK: - Merchant IDs
+
+struct MerchantID: Identifiable, Codable, Hashable {
+    let id: String
+    let attributes: MerchantIDAttributes
+}
+
+struct MerchantIDAttributes: Codable, Hashable {
+    let identifier: String
+    let name: String
+}
+
+struct MerchantIDsResponse: Codable {
+    let data: [MerchantID]
+    let links: PagedDocumentLinks?
+}
+
+struct ResourceLinks: Codable, Hashable {
+    let `self`: String
+}
+
+struct ASCCertificate: Identifiable, Codable, Hashable {
+    let id: String
+    let attributes: ASCCertificateAttributes
+    let links: ResourceLinks?
+}
+
+struct ASCCertificateAttributes: Codable, Hashable {
+    let name: String?
+    let displayName: String?
+    let expirationDate: String?
+    let certificateType: String?
+    let activated: Bool?
+}
+
+struct CertificateResponse: Codable {
+    let data: ASCCertificate
+}
+
+struct CertificatesResponse: Codable {
+    let data: [ASCCertificate]
+    let links: PagedDocumentLinks?
+}
+
+struct MerchantCertificateStatus: Identifiable, Hashable {
+    let id: String
+    let identifier: String
+    let name: String
+    let activeExpirationDate: Date?
+    let hasReadyCertificateToActivate: Bool
+    let certificateIdToActivate: String?
+    let pendingExpirationDate: Date?
+}

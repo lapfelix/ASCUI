@@ -1,6 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum MerchantSortKey {
+    case identifier, activeExpiration, readyToActivate
+}
+
 @MainActor @Observable
 final class AppViewModel {
     var apiKeyID: String = UserDefaults.standard.string(forKey: "apiKeyID") ?? ""
@@ -15,6 +19,11 @@ final class AppViewModel {
 
     var betaGroups: [BetaGroup] = []
     var selectedBetaGroup: BetaGroup?
+    var merchantCertificateStatuses: [MerchantCertificateStatus] = []
+    var selectedMerchants: Set<String> = []
+    var merchantSortKey: MerchantSortKey = .activeExpiration
+    var merchantSortAscending: Bool = true
+    var showActivateConfirmation = false
 
     var statusMessage: String?
     var progress: Double?
@@ -22,14 +31,51 @@ final class AppViewModel {
 
     var isLoading: Bool { progress != nil }
     var canFetch: Bool { !apiKeyID.isEmpty && !apiKey.isEmpty && !issuerID.isEmpty && !isLoading }
+    var canFetchMerchantCertificates: Bool { canFetch }
     var canAddTesters: Bool { !selectedApps.isEmpty && !selectedUsers.isEmpty && selectedBetaGroup != nil && !isLoading }
+
+    var sortedMerchantCertificateStatuses: [MerchantCertificateStatus] {
+        merchantCertificateStatuses.sorted { a, b in
+            let result: Bool
+            switch merchantSortKey {
+            case .identifier:
+                result = a.identifier.localizedCaseInsensitiveCompare(b.identifier) == .orderedAscending
+            case .activeExpiration:
+                result = (a.activeExpirationDate ?? .distantFuture) < (b.activeExpirationDate ?? .distantFuture)
+            case .readyToActivate:
+                result = a.hasReadyCertificateToActivate && !b.hasReadyCertificateToActivate
+            }
+            return merchantSortAscending ? result : !result
+        }
+    }
+
+    var merchantsToActivate: [MerchantCertificateStatus] {
+        merchantCertificateStatuses.filter { selectedMerchants.contains($0.id) && $0.hasReadyCertificateToActivate }
+    }
 
     private var client: AppStoreConnectClient {
         AppStoreConnectClient(apiKeyID: apiKeyID, apiKey: apiKey, issuerID: issuerID)
     }
 
+    private static let iso8601WithFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     var hasValidP8Key: Bool {
         apiKey.contains("-----BEGIN PRIVATE KEY-----") && apiKey.contains("-----END PRIVATE KEY-----")
+    }
+
+    private func parseAPIDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return Self.iso8601WithFractionalSeconds.date(from: value) ?? Self.iso8601.date(from: value)
     }
 
     func saveCredentials() {
@@ -114,6 +160,82 @@ final class AppViewModel {
         statusMessage = nil
     }
 
+    func fetchMerchantCertificateStatuses() async {
+        errorMessage = nil
+        progress = 0
+        statusMessage = "Fetching merchant IDs…"
+
+        do {
+            let merchants = try await client.fetchAllMerchantIDs()
+            var statuses: [MerchantCertificateStatus] = []
+            let now = Date()
+
+            if merchants.isEmpty {
+                merchantCertificateStatuses = []
+                progress = nil
+                statusMessage = nil
+                return
+            }
+
+            for (index, merchant) in merchants.enumerated() {
+                statusMessage = "Fetching certificates for \(merchant.attributes.identifier)…"
+
+                do {
+                    let certificates = try await client.fetchMerchantCertificates(for: merchant.id)
+
+                    let nonExpired = certificates.filter {
+                        guard let dateStr = $0.attributes.expirationDate,
+                              let date = parseAPIDate(dateStr) else { return false }
+                        return date > now
+                    }
+
+                    let activeCert = nonExpired.first { $0.attributes.activated == true }
+                    let activeExpirationDate = activeCert.flatMap { parseAPIDate($0.attributes.expirationDate) }
+
+                    let pendingCert = nonExpired.first { $0.attributes.activated == false }
+                    let pendingExpirationDate = pendingCert.flatMap { parseAPIDate($0.attributes.expirationDate) }
+
+                    statuses.append(
+                        MerchantCertificateStatus(
+                            id: merchant.id,
+                            identifier: merchant.attributes.identifier,
+                            name: merchant.attributes.name,
+                            activeExpirationDate: activeExpirationDate,
+                            hasReadyCertificateToActivate: pendingCert != nil,
+                            certificateIdToActivate: pendingCert?.id,
+                            pendingExpirationDate: pendingExpirationDate
+                        )
+                    )
+                } catch {
+                    errorMessage = "Failed to fetch certificates for \(merchant.attributes.identifier): \(error.localizedDescription)"
+                    statuses.append(
+                        MerchantCertificateStatus(
+                            id: merchant.id,
+                            identifier: merchant.attributes.identifier,
+                            name: merchant.attributes.name,
+                            activeExpirationDate: nil,
+                            hasReadyCertificateToActivate: false,
+                            certificateIdToActivate: nil,
+                            pendingExpirationDate: nil
+                        )
+                    )
+                }
+
+                progress = Double(index + 1) / Double(merchants.count)
+            }
+
+            merchantCertificateStatuses = statuses.sorted {
+                ($0.activeExpirationDate ?? .distantFuture) < ($1.activeExpirationDate ?? .distantFuture)
+            }
+        } catch {
+            merchantCertificateStatuses = []
+            errorMessage = "Failed to fetch merchant IDs: \(error.localizedDescription)"
+        }
+
+        progress = nil
+        statusMessage = nil
+    }
+
     func addToTestFlight() async {
         guard let targetGroup = selectedBetaGroup else { return }
         errorMessage = nil
@@ -161,6 +283,31 @@ final class AppViewModel {
         progress = nil
         statusMessage = nil
     }
+
+    func activateSelectedCertificates() async {
+        let toActivate = merchantsToActivate
+        guard !toActivate.isEmpty else { return }
+
+        errorMessage = nil
+        progress = 0
+        let total = Double(toActivate.count)
+
+        for (index, merchant) in toActivate.enumerated() {
+            guard let certId = merchant.certificateIdToActivate else { continue }
+            statusMessage = "Activating certificate for \(merchant.identifier)…"
+            do {
+                try await client.activateCertificate(id: certId)
+            } catch {
+                errorMessage = "Failed to activate certificate for \(merchant.identifier): \(error.localizedDescription)"
+            }
+            progress = Double(index + 1) / total
+        }
+
+        selectedMerchants.removeAll()
+        progress = nil
+        statusMessage = "Re-fetching merchant certificates…"
+        await fetchMerchantCertificateStatuses()
+    }
 }
 
 // MARK: - ContentView
@@ -169,15 +316,18 @@ struct ContentView: View {
     @State private var viewModel = AppViewModel()
     @State private var isDroppingP8 = false
     @State private var isEditingCredentials = false
+    private static let merchantExpirationDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     var body: some View {
         VStack {
             credentialsSection
-            fetchButton
+            tabsSection
             errorBanner
-            listsSection
-            betaGroupPicker
-            addButton
             loadingIndicator
         }
         .padding()
@@ -295,6 +445,156 @@ struct ContentView: View {
             }
         }
         return true
+    }
+
+    // MARK: - Tabs
+
+    private var tabsSection: some View {
+        TabView {
+            testFlightTab
+                .tabItem { Label("TestFlight", systemImage: "airplane") }
+            merchantCertificatesTab
+                .tabItem { Label("Apple Pay", systemImage: "creditcard") }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var testFlightTab: some View {
+        VStack {
+            fetchButton
+            listsSection
+            betaGroupPicker
+            addButton
+        }
+    }
+
+    private func merchantSortIndicator(for key: MerchantSortKey) -> String {
+        guard viewModel.merchantSortKey == key else { return "" }
+        return viewModel.merchantSortAscending ? " ▲" : " ▼"
+    }
+
+    private func toggleMerchantSort(_ key: MerchantSortKey) {
+        if viewModel.merchantSortKey == key {
+            viewModel.merchantSortAscending.toggle()
+        } else {
+            viewModel.merchantSortKey = key
+            viewModel.merchantSortAscending = true
+        }
+    }
+
+    private var merchantCertificatesTab: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button("Fetch Merchant IDs") {
+                    Task { await viewModel.fetchMerchantCertificateStatuses() }
+                }
+                .disabled(!viewModel.canFetchMerchantCertificates)
+
+                Spacer()
+
+                if !viewModel.selectedMerchants.isEmpty {
+                    Text("\(viewModel.selectedMerchants.count) selected")
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("\(viewModel.merchantCertificateStatuses.count) merchants")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            HStack {
+                Button { toggleMerchantSort(.identifier) } label: {
+                    Text("Merchant ID\(merchantSortIndicator(for: .identifier))")
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Button { toggleMerchantSort(.activeExpiration) } label: {
+                    Text("Active cert expires\(merchantSortIndicator(for: .activeExpiration))")
+                }
+                .buttonStyle(.plain)
+                .frame(width: 170, alignment: .leading)
+                Button { toggleMerchantSort(.readyToActivate) } label: {
+                    Text("Ready to activate\(merchantSortIndicator(for: .readyToActivate))")
+                }
+                .buttonStyle(.plain)
+                .frame(width: 140, alignment: .leading)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+
+            List(viewModel.sortedMerchantCertificateStatuses) { merchant in
+                HStack {
+                    Toggle(isOn: Binding(
+                        get: { viewModel.selectedMerchants.contains(merchant.id) },
+                        set: { isOn in
+                            if isOn { viewModel.selectedMerchants.insert(merchant.id) }
+                            else { viewModel.selectedMerchants.remove(merchant.id) }
+                        }
+                    )) {
+                        VStack(alignment: .leading) {
+                            Text(merchant.identifier)
+                            Text(merchant.name)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    Spacer()
+                    Text(formattedMerchantExpirationDate(merchant.activeExpirationDate))
+                        .foregroundStyle(merchantExpiresWithinOneMonth(merchant.activeExpirationDate) ? .yellow : .primary)
+                        .frame(width: 170, alignment: .leading)
+                    Label(
+                        merchant.hasReadyCertificateToActivate ? "Yes" : "No",
+                        systemImage: merchant.hasReadyCertificateToActivate ? "checkmark.circle.fill" : "xmark.circle"
+                    )
+                    .foregroundStyle(merchant.hasReadyCertificateToActivate ? .green : .secondary)
+                    .frame(width: 140, alignment: .leading)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Activate Certificates") {
+                    viewModel.showActivateConfirmation = true
+                }
+                .disabled(viewModel.merchantsToActivate.isEmpty || viewModel.isLoading)
+            }
+            .padding(.horizontal)
+            .confirmationDialog(
+                "Activate Certificates",
+                isPresented: $viewModel.showActivateConfirmation
+            ) {
+                Button("Activate \(viewModel.merchantsToActivate.count) Certificate(s)", role: .destructive) {
+                    Task { await viewModel.activateSelectedCertificates() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(activateConfirmationMessage)
+            }
+        }
+    }
+
+    private var activateConfirmationMessage: String {
+        let merchants = viewModel.merchantsToActivate
+        var lines = ["Activate certificate for:\n"]
+        for m in merchants {
+            let expiry = m.pendingExpirationDate.map { Self.merchantExpirationDateFormatter.string(from: $0) } ?? "unknown"
+            lines.append("• \(m.identifier) (expires \(expiry))")
+        }
+        lines.append("\nThis will make these certificates the active payment processing certificates.")
+        return lines.joined(separator: "\n")
+    }
+
+    private func formattedMerchantExpirationDate(_ date: Date?) -> String {
+        guard let date else { return "No active certificate" }
+        return Self.merchantExpirationDateFormatter.string(from: date)
+    }
+
+    private func merchantExpiresWithinOneMonth(_ date: Date?) -> Bool {
+        guard let date else { return false }
+        guard let oneMonthFromNow = Calendar.current.date(byAdding: .month, value: 1, to: Date()) else { return false }
+        return date < oneMonthFromNow
     }
 
     // MARK: - Fetch
