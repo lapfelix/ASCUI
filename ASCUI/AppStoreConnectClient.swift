@@ -151,10 +151,16 @@ struct AppStoreConnectClient {
                 detailedCertificates.append(cert)
                 continue
             }
-            let detailRequest = try authorizedRequest(url: detailURL)
-            let detailData = try await responseData(for: detailRequest)
-            let detail = try JSONDecoder().decode(CertificateResponse.self, from: detailData)
-            detailedCertificates.append(detail.data)
+            do {
+                let detailRequest = try authorizedRequest(url: detailURL)
+                let detailData = try await responseData(for: detailRequest)
+                let detail = try JSONDecoder().decode(CertificateResponse.self, from: detailData)
+                detailedCertificates.append(detail.data)
+            } catch ASCError.apiError(let statusCode, _) where statusCode == 404 {
+                // Certificate was deleted between list and detail fetch (can happen after activation).
+                // Ignore this stale entry and continue with a consistent set.
+                continue
+            }
         }
 
         return detailedCertificates
