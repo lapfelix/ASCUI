@@ -10,6 +10,7 @@ final class AppViewModel {
     var apiKeyID: String = UserDefaults.standard.string(forKey: "apiKeyID") ?? ""
     var apiKey: String = Keychain.load(key: "apiKey") ?? ""
     var issuerID: String = UserDefaults.standard.string(forKey: "issuerID") ?? ""
+    var ascProfileName: String = UserDefaults.standard.string(forKey: "ascProfileName") ?? ""
 
     var apps: [ASCApp] = []
     var selectedApps: Set<ASCApp> = []
@@ -85,6 +86,31 @@ final class AppViewModel {
             Keychain.delete(key: "apiKey")
         } else {
             Keychain.save(key: "apiKey", value: apiKey)
+        }
+    }
+
+    func copyASCImportCommand() {
+        UserDefaults.standard.set(ascProfileName, forKey: "ascProfileName")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ASCImportPayload.terminalCommand(profile: ascProfileName), forType: .string)
+        statusMessage = "Command copied. Run it in Terminal, then choose Paste Credentials."
+    }
+
+    func importCredentialsFromClipboard() {
+        do {
+            let payload = try ASCImportPayload.parse(NSPasteboard.general.string(forType: .string))
+            apiKeyID = payload.keyId
+            issuerID = payload.issuerId
+            apiKey = payload.privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            ascProfileName = payload.name
+            saveCredentials()
+            UserDefaults.standard.set(ascProfileName, forKey: "ascProfileName")
+            // Don't leave the private key on the clipboard.
+            NSPasteboard.general.clearContents()
+            errorMessage = nil
+            statusMessage = "Imported asc profile “\(payload.name)”."
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -362,7 +388,8 @@ struct ContentView: View {
             Text("Issuer: \(viewModel.issuerID)")
                 .foregroundStyle(.secondary)
             Spacer()
-            Label("Key loaded", systemImage: "checkmark.circle.fill")
+            Label(viewModel.ascProfileName.isEmpty ? "Key loaded" : "Key loaded (\(viewModel.ascProfileName))",
+                  systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
             Button {
                 isEditingCredentials = true
@@ -402,6 +429,8 @@ struct ContentView: View {
                     .onChange(of: viewModel.issuerID) { viewModel.saveCredentials() }
             }
 
+            ascImportMenu
+
             if credentialsAreSet {
                 Button {
                     isEditingCredentials = false
@@ -412,6 +441,18 @@ struct ContentView: View {
                 .padding(.top, 16)
             }
         }
+    }
+
+    private var ascImportMenu: some View {
+        Menu {
+            TextField("asc profile (blank = default)", text: $viewModel.ascProfileName)
+            Button("Copy Terminal Command") { viewModel.copyASCImportCommand() }
+            Button("Paste Credentials") { viewModel.importCredentialsFromClipboard() }
+        } label: {
+            Label("Import from asc", systemImage: "terminal")
+        }
+        .fixedSize()
+        .padding(.top, 16)
     }
 
     private var apiKeyDropZone: some View {
